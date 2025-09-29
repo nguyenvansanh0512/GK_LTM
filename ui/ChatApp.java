@@ -5,23 +5,25 @@ import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
 
 import chat.ChatHandler;
-
-import javax.swing.JFileChooser;
 import java.io.File;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.Collections;
-import java.util.Iterator;
+import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 
-// Triển khai interface để nhận thông báo khi một kết nối bị đóng
-public class ChatApp implements ChatHandler.ConnectionClosedListener {
+// Triển khai cả 2 interface để quản lý Tab và xử lý gửi tin nhắn
+public class ChatApp implements ChatHandler.ConnectionClosedListener, ChatPanel.SendActionListener {
     public static final int PORT = 12345;
-    // Danh sách để quản lý tất cả các kết nối đang hoạt động
+    // Danh sách để quản lý tất cả các ChatHandler đang hoạt động
     private final List<ChatHandler> activeHandlers = Collections.synchronizedList(new LinkedList<>());
     private ChatWindow chatWindow;
+    // Map để ánh xạ ChatPanel (Tab UI) với ChatHandler (Luồng mạng)
+    private final Map<ChatPanel, ChatHandler> panelToHandlerMap = Collections.synchronizedMap(new HashMap<>());
+
 
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> new ChatApp().start());
@@ -39,29 +41,21 @@ public class ChatApp implements ChatHandler.ConnectionClosedListener {
         if (host != null && !host.trim().isEmpty()) {
             startClientConnection(host.trim());
         }
-
-        // 3. Gắn hành động gửi tin nhắn / gửi file (sẽ gửi đi TẤT CẢ các handler)
-        attachActions();
     }
     
     private void startServerListener() {
         new Thread(() -> {
             try (ServerSocket serverSocket = new ServerSocket(PORT)) {
-                chatWindow.appendMessage("System", "Server đang lắng nghe trên cổng " + PORT + "...");
+                chatWindow.appendSystemMessage("Server đang lắng nghe trên cổng " + PORT + "...");
                 while (true) {
                     Socket socket = serverSocket.accept();
                     String peerAddress = socket.getInetAddress().getHostAddress();
-                    SwingUtilities.invokeLater(() -> chatWindow.appendMessage("System", "Peer đã kết nối đến: " + peerAddress));
                     
-                    // Tạo và khởi động Handler mới
-                    ChatHandler handler = new ChatHandler(socket, chatWindow, null);
-                    activeHandlers.add(handler);
-                    handler.start();
-                    
-                    SwingUtilities.invokeLater(() -> chatWindow.appendMessage("System", "Tổng kết nối: " + activeHandlers.size()));
+                    // Tạo Tab và Handler mới cho kết nối đến
+                    setupNewConnection(socket, peerAddress);
                 }
             } catch (IOException e) {
-                SwingUtilities.invokeLater(() -> chatWindow.appendMessage("System", "Server lỗi: " + e.getMessage()));
+                chatWindow.appendSystemMessage("Server lỗi: " + e.getMessage());
             }
         }).start();
     }
@@ -70,77 +64,85 @@ public class ChatApp implements ChatHandler.ConnectionClosedListener {
         new Thread(() -> {
             try {
                 Socket socket = new Socket(host, PORT);
-                SwingUtilities.invokeLater(() -> chatWindow.appendMessage("System", "Đã kết nối Client tới peer: " + host));
                 
-                // Tạo và khởi động Handler mới
-                ChatHandler handler = new ChatHandler(socket, chatWindow, this);
-                activeHandlers.add(handler);
-                handler.start();
+                // Tạo Tab và Handler mới cho kết nối đi
+                setupNewConnection(socket, host);
                 
             } catch (IOException e) {
-                SwingUtilities.invokeLater(() -> chatWindow.appendMessage("System", "Không thể kết nối Client tới " + host + "!"));
+                chatWindow.appendSystemMessage("Không thể kết nối Client tới " + host + "! Lỗi: " + e.getMessage());
             }
         }).start();
     }
     
-    // Gắn hành động gửi tin nhắn / gửi file cho TẤT CẢ handlers
-    private void attachActions() {
-        chatWindow.addSendAction(ev -> {
-            String msg = chatWindow.getInputText();
-            if (!msg.isEmpty()) {
-                // Hiển thị tin nhắn của mình một lần duy nhất
-                chatWindow.appendMessage("Me", msg);
-                
-                // Gửi tin nhắn đến TẤT CẢ các peer
-                sendMessageToAll(msg);
-                chatWindow.clearInput();
-            }
+    // Phương thức chung để thiết lập Handler và Panel
+    private void setupNewConnection(Socket socket, String peerAddress) throws IOException {
+        String peerName = peerAddress; // Sử dụng địa chỉ IP làm tên Tab
+        
+        // Tạo ChatPanel (Tab UI)
+        ChatPanel chatPanel = new ChatPanel(peerName, this); // Gán 'this' làm SendActionListener
+        
+        // Tạo ChatHandler (Luồng mạng)
+        ChatHandler handler = new ChatHandler(socket, chatWindow, chatPanel, this);
+        
+        // Thêm vào danh sách và Map
+        activeHandlers.add(handler);
+        panelToHandlerMap.put(chatPanel, handler);
+        
+        // Cập nhật UI và khởi động Thread
+        SwingUtilities.invokeLater(() -> {
+            chatWindow.addChatPanel(peerName, chatPanel);
+            chatWindow.appendSystemMessage("Đã tạo kết nối mới với: " + peerName + ". Tổng kết nối: " + activeHandlers.size());
         });
         
-        chatWindow.addSendFileAction(ev -> {
-            if (activeHandlers.isEmpty()) {
-                 chatWindow.appendMessage("System", "Không có kết nối nào để gửi file!");
-                 return;
-            }
-            
-            JFileChooser chooser = new JFileChooser();
-            if (chooser.showOpenDialog(chatWindow) == JFileChooser.APPROVE_OPTION) {
-                File file = chooser.getSelectedFile();
-                chatWindow.appendMessage("System", "Đang gửi file: " + file.getName() + " đến tất cả peers...");
-                sendFileToAll(file);
-            }
-        });
+        handler.start();
     }
-    
-    private void sendMessageToAll(String message) {
-        // Dùng Iterator để có thể xóa phần tử an toàn trong khi duyệt
-        synchronized (activeHandlers) {
-            Iterator<ChatHandler> iterator = activeHandlers.iterator();
-            while (iterator.hasNext()) {
-                ChatHandler handler = iterator.next();
-                if (!handler.sendMessage(message)) {
-                    // Nếu gửi thất bại, xóa handler khỏi danh sách (vì nó đã đóng)
-                    iterator.remove(); 
-                }
+
+    // Xử lý sự kiện GỬI từ một ChatPanel (ChatPanel.SendActionListener)
+    @Override
+    public void onSend(String message, ChatPanel sourcePanel) {
+        // 1. Tìm Handler liên kết với Tab đang gửi
+        ChatHandler handler = panelToHandlerMap.get(sourcePanel);
+        
+        if (handler != null) {
+            // 2. Gửi tin nhắn qua Handler đó (chỉ gửi riêng 1 peer)
+            if (handler.sendMessage(message)) {
+                // 3. Hiển thị tin nhắn của mình trong Tab đó
+                sourcePanel.appendMessage("Me", message);
+            } else {
+                sourcePanel.appendMessage("System", "Gửi thất bại. Kết nối đã đóng.");
             }
+        } else {
+            sourcePanel.appendMessage("System", "Không tìm thấy kết nối!");
         }
     }
     
-    private void sendFileToAll(File file) {
-        // Gửi file đến TẤT CẢ các peer
-        synchronized (activeHandlers) {
-            for (ChatHandler handler : activeHandlers) {
-                handler.sendFile(file);
-            }
+    @Override
+    public void onSendFile(File file, ChatPanel sourcePanel) {
+        ChatHandler handler = panelToHandlerMap.get(sourcePanel);
+        if (handler != null) {
+            handler.sendFile(file);
+        } else {
+            sourcePanel.appendMessage("System", "Không tìm thấy kết nối!");
         }
     }
 
-    // Triển khai interface ConnectionClosedListener để xóa handler bị đóng
+    // Triển khai ConnectionClosedListener để xóa Handler và Tab bị đóng
     @Override
     public void onClosed(ChatHandler handler) {
+        // Xóa khỏi danh sách Handler
         synchronized (activeHandlers) {
             activeHandlers.remove(handler);
-            SwingUtilities.invokeLater(() -> chatWindow.appendMessage("System", "Tổng số kết nối còn lại: " + activeHandlers.size()));
         }
+        
+        // Xóa ChatPanel khỏi UI và Map
+        ChatPanel panelToRemove = handler.getChatPanel();
+        if (panelToRemove != null) {
+            SwingUtilities.invokeLater(() -> {
+                chatWindow.removeChatPanel(panelToRemove);
+            });
+            panelToHandlerMap.remove(panelToRemove);
+        }
+        
+        chatWindow.appendSystemMessage("Kết nối " + handler.getPeerAddress() + " đã bị đóng. Tổng số kết nối còn lại: " + activeHandlers.size());
     }
 }

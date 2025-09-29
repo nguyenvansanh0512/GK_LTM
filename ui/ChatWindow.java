@@ -2,64 +2,52 @@ package ui;
 
 import javax.swing.*;
 import java.awt.*;
-import java.awt.event.ActionListener;
 
+// ChatWindow giờ chỉ là khung chứa JTabbedPane
 public class ChatWindow extends JFrame {
-    private JTextArea chatArea;
-    private JTextField inputField;
-    private JButton sendButton;
-     private JButton sendFileButton;
-
+    private JTabbedPane tabbedPane;
 
     public ChatWindow() {
-      
-
-        setTitle("P2P Chat ");
-         setSize(500, 300);
+        setTitle("P2P Chat (Tab Mode)");
+        setSize(800, 500); // Tăng kích thước
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLayout(new BorderLayout());
 
-        chatArea = new JTextArea();
-        chatArea.setEditable(false);
+        tabbedPane = new JTabbedPane();
+        add(tabbedPane, BorderLayout.CENTER);
 
-        inputField = new JTextField();
-        sendButton = new JButton("Send");
-        sendFileButton = new JButton("Send File"); 
-
-        JPanel bottom = new JPanel(new BorderLayout());
+        // Thêm một Tab ban đầu cho thông báo hệ thống
+        JTextArea systemArea = new JTextArea("Chào mừng đến với ứng dụng Chat P2P Tab Mode!\nHãy kết nối với Peer đầu tiên.");
+        systemArea.setEditable(false);
+        tabbedPane.addTab("System Log", new JScrollPane(systemArea));
         
-        JPanel buttonPanel = new JPanel(new GridLayout(1, 2, 5, 0));
-        buttonPanel.add(sendButton);
-        buttonPanel.add(sendFileButton);
-        
-        bottom.add(inputField, BorderLayout.CENTER);
-        bottom.add(buttonPanel, BorderLayout.EAST);
-
-        add(new JScrollPane(chatArea), BorderLayout.CENTER);
-        add(bottom, BorderLayout.SOUTH);
-
         setVisible(true);
     }
-
-    public void addSendAction(ActionListener listener) {
-        sendButton.addActionListener(listener);
-        inputField.addActionListener(listener); // Enter = gửi
+    
+    // Phương thức để thêm một Tab Chat mới
+    public void addChatPanel(String title, ChatPanel panel) {
+        tabbedPane.addTab(title, panel);
+        tabbedPane.setSelectedComponent(panel); // Chọn Tab vừa thêm
     }
-    public void addSendFileAction(ActionListener listener) {
-         sendFileButton.addActionListener(listener);
-    }
-
-    public String getInputText() {
-        return inputField.getText().trim();
-    }
-
-    public void clearInput() {
-        inputField.setText("");
+    
+    // Phương thức để xóa một Tab khi kết nối bị đóng
+    public void removeChatPanel(ChatPanel panel) {
+        tabbedPane.remove(panel);
     }
 
-    public void appendMessage(String sender, String message) {
-        chatArea.append(sender + ": " + message + "\n");
+    // Phương thức hiển thị thông báo ra System Log (Tab đầu tiên)
+    public void appendSystemMessage(String message) {
+        SwingUtilities.invokeLater(() -> {
+            Component systemLog = tabbedPane.getComponentAt(0);
+            if (systemLog instanceof JScrollPane) {
+                JViewport viewport = ((JScrollPane) systemLog).getViewport();
+                if (viewport.getView() instanceof JTextArea) {
+                    ((JTextArea) viewport.getView()).append(message + "\n");
+                }
+            }
+        });
     }
-
-   
+    
+    // Xóa các hàm cũ không dùng nữa (như addSendAction, getInputText, clearInput, appendMessage)
+    // vì logic này đã chuyển vào ChatPanel.
 }
